@@ -59,6 +59,14 @@ const SEVERITY_COLORS = {
   Low: 'var(--success)',
 };
 
+const VERDICT_COLORS = {
+  'Alert': '#FF453A',        // red pill
+  'Not Alert': '#30D158',    // green pill
+  'Pending': '#FF9F0A',      // amber pill
+  'Under Review': '#0A84FF', // blue pill
+  'Approved': '#30D158',     // teal with checkmark (same as green)
+};
+
 const REPORT_SECTIONS_DAILY = [
   'Executive Summary',
   'KPI Metrics',
@@ -90,6 +98,117 @@ const REPORT_SECTIONS_MONTHLY = [
   'Risk Posture',
   'Incident Appendix',
 ];
+
+// ═══════════════════════════════════════════════════════
+// EXCEL PARSING — SOC OBSERVATION SCHEMA
+// ═══════════════════════════════════════════════════════
+
+// Helper: Extract named field from Details multiline block
+const extractDetail = (details, fieldName) => {
+  if (!details) return '';
+  const regex = new RegExp(fieldName + '\\s*:\\s*(.+)', 'i');
+  const match = String(details).match(regex);
+  return match ? match[1].trim() : '';
+};
+
+// Helper: Extract raw timestamp string from Details block
+const extractTimestamp = (details) => {
+  if (!details) return null;
+  const regex = /Timestamp\s*:\s*(.+)/i;
+  const match = String(details).match(regex);
+  if (!match) return null;
+  return match[1].trim();
+};
+
+// Helper: Extract and normalize date key (YYYY-MM-DD) from timestamp
+const extractDateKey = (details) => {
+  const raw = extractTimestamp(details);
+  if (!raw) return null;
+  // Strip timezone label (IST, UTC, EST, PST, GMT, CST) before parsing
+  const cleaned = raw.replace(/\b(IST|UTC|EST|PST|GMT|CST)\b/gi, '').trim();
+  try {
+    const d = new Date(cleaned);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString().split('T')[0]; // → "2028-02-20"
+  } catch {
+    return null;
+  }
+};
+
+// Helper: Derive severity from Justification + Impacts
+const deriveSeverity = (justification, impacts) => {
+  const j = String(justification || '').toLowerCase();
+  const i = String(impacts || '').toLowerCase();
+  
+  if (j.includes('not alert') || j.includes('false positive')) return 'Low';
+  if (i.includes('critical') || j.includes('critical')) return 'Critical';
+  if (i.includes('high') || j.includes('escalat')) return 'High';
+  if (j.includes('alert') || i.includes('unauthori')) return 'High';
+  if (i.includes('medium') || i.includes('moderate')) return 'Medium';
+  return 'Medium';
+};
+
+// Helper: Derive verdict badge from Justification field
+const deriveVerdict = (justification) => {
+  const j = String(justification || '').toLowerCase();
+  if (j.includes('not alert') || j.includes('false')) return 'Not Alert';
+  if (j.includes('alert') || j.includes('escalat')) return 'Alert';
+  if (j.includes('pending') || j === '') return 'Pending';
+  return 'Under Review';
+};
+
+// Helper: Derive status from approval state
+const deriveStatus = (justification, approvedBy) => {
+  if (approvedBy && approvedBy.trim() !== '') return 'Approved';
+  if (!justification || justification.trim() === '') return 'Pending';
+  return 'Reviewed';
+};
+
+// Main normalization function for SOC Excel rows
+const normalizeSOCRow = (row, sheetName, sourceName, rowIndex) => {
+  const details = row['Details'] || row['details'] || '';
+  const justification = row['Justification (Alert or Not)'] 
+    || row['Justification'] 
+    || row['justification'] || '';
+  
+  return {
+    // Identifiers
+    incidentId: row['S.No'] || row['S.NO'] || row['s.no'] || `ROW-${rowIndex}`,
+    _sheet: sheetName,
+    _source: sourceName,
+    _rowIndex: rowIndex,
+    
+    // Main fields
+    title: row['Event Name'] || row['event name'] || '',
+    description: row['Description'] || row['description'] || '',
+    observation: row['Observation'] || row['observation'] || '',
+    impact: row['Impacts'] || row['Impact'] || row['impacts'] || '',
+    
+    // Details block (raw and parsed)
+    details: details,
+    host: extractDetail(details, 'Host'),
+    user: extractDetail(details, 'User'),
+    parentProcess: extractDetail(details, 'Parent Process'),
+    fileName: extractDetail(details, 'FileName'),
+    filePath: extractDetail(details, 'FilePath'),
+    commandLine: extractDetail(details, 'Command Line'),
+    fileHash: extractDetail(details, 'File Hash'),
+    
+    // Date/Time (extracted from Details timestamp)
+    timestamp: extractTimestamp(details),
+    dateKey: extractDateKey(details),
+    
+    // Analyst fields
+    justification: justification,
+    analyst: row['Analysed by'] || row['Analyzed by'] || row['analysed by'] || sheetName,
+    approvedBy: row['Approved by'] || row['Approved By'] || '',
+    
+    // Derived fields
+    severity: deriveSeverity(justification, row['Impacts']),
+    verdict: deriveVerdict(justification),
+    status: deriveStatus(justification, row['Approved by']),
+  };
+};
 
 // ═══════════════════════════════════════════════════════
 // HOME PAGE
@@ -269,26 +388,48 @@ const DataSourcesPage = ({ excelSources, setExcelSources, apiIntegrations, setAp
           const workbook = XLSX.read(data, { type: 'array' });
 
           const availableSheets = workbook.SheetNames;
-          const recordCount = workbook.SheetNames.reduce((total, sheetName) => {
+          const sourceName = file.name.replace(/\.[^/.]+$/, ''); // Remove extension
+          
+          // Parse all sheets and normalize SOC rows
+          const allParsedRows = [];
+          const dateMap = {};
+          let totalRecords = 0;
+          
+          availableSheets.forEach(sheetName => {
             const sheet = workbook.Sheets[sheetName];
-            if (sheet['!ref']) {
-              const range = XLSX.utils.decode_range(sheet['!ref']);
-              return total + Math.max(0, range.e.r - range.s.r);
-            }
-            return total;
-          }, 0);
+            const rows = XLSX.utils.sheet_to_json(sheet);
+            
+            rows.forEach((row, rowIndex) => {
+              const normalized = normalizeSOCRow(row, sheetName, sourceName, rowIndex + 2);
+              allParsedRows.push(normalized);
+              
+              // Build dateMap for calendar view
+              if (normalized.dateKey) {
+                if (!dateMap[normalized.dateKey]) {
+                  dateMap[normalized.dateKey] = [];
+                }
+                dateMap[normalized.dateKey].push(normalized);
+              }
+            });
+            
+            totalRecords += rows.length;
+          });
 
           const newSource = {
             id: Date.now().toString(),
             url: null,
-            nickname: file.name.replace(/\.[^/.]+$/, ''), // Remove extension
+            nickname: sourceName,
             sheet: availableSheets[0], // Auto-select first sheet
             availableSheets,
             status: 'active',
             lastSync: new Date(),
-            recordCount,
+            recordCount: totalRecords,
             loading: false,
             error: null,
+            // NEW: Store parsed SOC data
+            parsedData: allParsedRows,
+            dateMap: dateMap,
+            workbook: workbook, // Store workbook for later access
           };
 
           setExcelSources(prev => [...prev, newSource]);
@@ -616,8 +757,18 @@ const ReportGeneratorPage = ({ excelSources }) => {
   const [generating, setGenerating] = useState(false);
   const [generatedReport, setGeneratedReport] = useState(null);
 
-  const analysts = ['Alice Chen', 'Bob Smith', 'Carol Zhang', 'David Park'];
-  const severities = ['Critical', 'High', 'Medium', 'Low'];
+  // Extract unique analysts from available sources
+  const analysts = Array.from(
+    new Set(
+      availableSources
+        .flatMap(s => s.parsedData || [])
+        .map(row => row.analyst)
+        .filter(Boolean)
+    )
+  ).sort();
+  
+  const fallbackAnalysts = ['Alice Chen', 'Bob Smith', 'Carol Zhang', 'David Park'];
+  const analystList = analysts.length > 0 ? analysts : fallbackAnalysts;
 
   // Available Excel sources (filter active ones)
   const availableSources = excelSources.filter(s => s.status === 'active');
@@ -671,38 +822,64 @@ const ReportGeneratorPage = ({ excelSources }) => {
   const handleGenerateReport = async () => {
     setGenerating(true);
 
-    // Simulate fetching data from selected sources
+    // Fetch data from selected sources using parsed SOC data
     const allIncidents = [];
     let totalRecords = 0;
 
     for (const sourceId of selectedSources) {
       const source = availableSources.find(s => s.id === sourceId);
-      if (source) {
-        // Mock data fetching - in real app, this would parse actual Excel data
-        const mockIncidents = Array.from({ length: Math.floor(source.recordCount / 10) }, (_, i) => ({
-          id: `${source.nickname}-INC-${String(i + 1).padStart(4, '0')}`,
-          timestamp: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString(),
-          analyst: analysts[Math.floor(Math.random() * analysts.length)],
-          severity: severities[Math.floor(Math.random() * severities.length)],
-          category: ['Malware', 'Phishing', 'Intrusion', 'Data Exfiltration', 'Unauthorized Access'][Math.floor(Math.random() * 5)],
-          title: `Incident from ${source.nickname}`,
-          description: `Generated from ${source.sheet} sheet`,
-          status: ['Open', 'Investigating', 'Resolved', 'Escalated'][Math.floor(Math.random() * 4)],
+      if (source && source.parsedData) {
+        // Use actual parsed SOC data
+        const incidents = source.parsedData.map(row => ({
+          // Use SOC field labels
+          incidentId: row.incidentId,
+          eventName: row.title,           // Event Name
+          description: row.description,
+          observation: row.observation,
+          time: row.timestamp,
+          dateKey: row.dateKey,
+          
+          // Host/Process details
+          host: row.host,
+          user: row.user,
+          parentProcess: row.parentProcess,
+          fileName: row.fileName,
+          filePath: row.filePath,
+          commandLine: row.commandLine,
+          fileHash: row.fileHash,
+          
+          // Analyst & approvals
+          analyst: row.analyst,           // Analysed by
+          approvedBy: row.approvedBy,     // Approved by
+          observation: row.observation,   // Written finding
+          justification: row.justification,
+          impact: row.impact,             // Impacts
+          
+          // Derived fields
+          severity: row.severity,
+          verdict: row.verdict,           // Alert | Not Alert | Pending
+          status: row.status,
+          
+          // Source tracking
           source: source.nickname,
+          _sheet: row._sheet,
         }));
 
-        allIncidents.push(...mockIncidents);
-        totalRecords += source.recordCount;
+        allIncidents.push(...incidents);
+        totalRecords += incidents.length;
       }
     }
 
     // Filter incidents based on user selections
-    const filteredIncidents = allIncidents.filter(inc =>
-      (!selectedAnalysts.length || selectedAnalysts.includes(inc.analyst)) &&
-      selectedSeverities.includes(inc.severity)
-    );
+    const filteredIncidents = allIncidents.filter(inc => {
+      const includesSeverity = !selectedSeverities.length || selectedSeverities.includes(inc.severity);
+      const includesAnalyst = !selectedAnalysts.length || selectedAnalysts.includes(inc.analyst);
+      const includesDate = reportType === 'daily' && inc.dateKey === selectedDate;
+      
+      return includesSeverity && includesAnalyst && (reportType !== 'daily' || includesDate);
+    });
 
-    await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate processing
+    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate processing
 
     setGeneratedReport({
       type: reportType,
@@ -838,7 +1015,7 @@ const ReportGeneratorPage = ({ excelSources }) => {
         <div className="option-group">
           <label>Analysts</label>
           <div className="checkbox-group">
-            {analysts.map(analyst => (
+            {analystList.map(analyst => (
               <label key={analyst} className="checkbox-label">
                 <input
                   type="checkbox"
@@ -998,34 +1175,48 @@ const ReportGeneratorPage = ({ excelSources }) => {
 
           {includeRawTable && (
             <div className="report-section">
-              <h2>Incident Details</h2>
+              <h2>Detection Details</h2>
               <div className="report-table-wrapper">
                 <table className="report-table">
                   <thead>
                     <tr>
-                      <th>ID</th>
-                      <th>Time</th>
-                      <th>Analyst</th>
+                      <th>Verdict</th>
+                      <th>S.No</th>
+                      <th>Event Name</th>
                       <th>Severity</th>
-                      <th>Category</th>
-                      <th>Title</th>
-                      <th>Status</th>
+                      <th>Analysed By</th>
+                      <th>Host</th>
+                      <th>Time</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {generatedReport.incidents.slice(0, 10).map(inc => (
-                      <tr key={inc.id}>
-                        <td>{inc.id}</td>
-                        <td>{new Date(inc.timestamp).toLocaleTimeString()}</td>
-                        <td>{inc.analyst}</td>
+                    {generatedReport.incidents.slice(0, 15).map((inc, idx) => (
+                      <tr key={idx}>
+                        <td>
+                          <span 
+                            className="verdict-badge" 
+                            style={{ 
+                              backgroundColor: VERDICT_COLORS[inc.verdict],
+                              color: '#fff',
+                              padding: '4px 12px',
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              fontWeight: '600'
+                            }}
+                          >
+                            {inc.verdict}
+                          </span>
+                        </td>
+                        <td>{inc.incidentId}</td>
+                        <td>{inc.eventName}</td>
                         <td>
                           <span className="severity-badge" style={{ color: SEVERITY_COLORS[inc.severity] }}>
                             {inc.severity}
                           </span>
                         </td>
-                        <td>{inc.category}</td>
-                        <td>{inc.title}</td>
-                        <td>{inc.status}</td>
+                        <td>{inc.analyst}</td>
+                        <td>{inc.host || '—'}</td>
+                        <td>{inc.time ? new Date(inc.time).toLocaleTimeString() : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -2237,6 +2428,15 @@ export default function SOCReportingTool() {
 
         .severity-badge {
           font-weight: 600;
+        }
+
+        .verdict-badge {
+          display: inline-block;
+          padding: 4px 12px;
+          border-radius: 12px;
+          font-size: 12px;
+          font-weight: 600;
+          color: #fff;
         }
 
         /* EXPORT BAR */
