@@ -1,7 +1,11 @@
-import SOCReportingTool from "./SOCReportingTool";
+import SOCReportingTool, { ThemeProvider } from "./SOCReportingTool";
 
 function App() {
-  return <SOCReportingTool />;
+  return (
+    <ThemeProvider>
+      <SOCReportingTool />
+    </ThemeProvider>
+  );
 }
 
 export default App;

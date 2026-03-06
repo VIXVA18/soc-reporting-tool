@@ -1,9 +1,40 @@
-import React, { useState, useReducer, useEffect, useRef } from 'react';
-import { Shield, Database, BarChart3, Palette, ChevronRight, Plus, Trash2, Cloud, HardDrive, Settings, Menu, X, Zap, Check, AlertCircle, Filter, Download, Copy, Printer, Mail, Eye, EyeOff, GripVertical, Save, RotateCcw } from 'lucide-react';
+import React, { useState, useReducer, useEffect, useRef, createContext, useContext } from 'react';
+import { Shield, Database, BarChart3, Palette, ChevronRight, Plus, Trash2, Cloud, HardDrive, Settings, Menu, X, Zap, Check, AlertCircle, Filter, Download, Copy, Printer, Mail, Eye, EyeOff, GripVertical, Save, RotateCcw, Sun, Moon, Upload } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart } from 'recharts';
 
 // Import SheetJS for Excel parsing
 import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
+
+// ═══════════════════════════════════════════════════════
+// THEME CONTEXT
+// ═══════════════════════════════════════════════════════
+
+const ThemeContext = createContext();
+
+const ThemeProvider = ({ children }) => {
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('soc-theme');
+    return saved ? JSON.parse(saved) : true; // Default to dark
+  });
+
+  useEffect(() => {
+    localStorage.setItem('soc-theme', JSON.stringify(isDarkMode));
+    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
+  const toggleTheme = () => setIsDarkMode(!isDarkMode);
+
+  return (
+    <ThemeContext.Provider value={{ isDarkMode, toggleTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+};
+
+const useTheme = () => useContext(ThemeContext);
+
+// Export ThemeProvider for use in App.tsx
+export { ThemeProvider };
 
 // ═══════════════════════════════════════════════════════
 // MOCK DATA & CONSTANTS
@@ -22,10 +53,10 @@ const MOCK_INCIDENTS = Array.from({ length: 45 }, (_, i) => ({
 }));
 
 const SEVERITY_COLORS = {
-  Critical: '#FF453A',
-  High: '#FF9F0A',
+  Critical: 'var(--error)',
+  High: 'var(--warning)',
   Medium: '#FFD60A',
-  Low: '#30D158',
+  Low: 'var(--success)',
 };
 
 const REPORT_SECTIONS_DAILY = [
@@ -162,6 +193,8 @@ const HomePage = () => {
 const DataSourcesPage = ({ excelSources, setExcelSources, apiIntegrations, setApiIntegrations }) => {
 
   const [totalRecords, setTotalRecords] = useState(231);
+  const [isLoading, setIsLoading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
 
   // Function to fetch and parse Excel file
   const fetchExcelSheets = async (url, sourceId) => {
@@ -172,29 +205,30 @@ const DataSourcesPage = ({ excelSources, setExcelSources, apiIntegrations, setAp
     ));
 
     try {
-      // For demo purposes, we'll simulate fetching
-      // In a real implementation, you'd use fetch() with CORS handling
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate network delay
-
-      // Mock Excel data - in real app, this would be actual XLSX.read()
-      const mockWorkbook = {
-        SheetNames: ['Analyst Observations', 'Escalations', 'Summary', 'Raw Data', 'Metrics'],
-        Sheets: {
-          'Analyst Observations': { A1: { v: 'ID' }, B1: { v: 'Timestamp' }, C1: { v: 'Analyst' } },
-          'Escalations': { A1: { v: 'Case ID' }, B1: { v: 'Priority' }, C1: { v: 'Status' } },
-          'Summary': { A1: { v: 'Date' }, B1: { v: 'Total Incidents' }, C1: { v: 'Resolved' } },
-          'Raw Data': { A1: { v: 'Event ID' }, B1: { v: 'Source' }, C1: { v: 'Details' } },
-          'Metrics': { A1: { v: 'Metric' }, B1: { v: 'Value' }, C1: { v: 'Target' } },
+      // Try to fetch from URL with CORS handling
+      const response = await fetch(url, {
+        mode: 'cors',
+        headers: {
+          'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel',
         }
-      };
+      });
 
-      // In real implementation:
-      // const response = await fetch(url);
-      // const arrayBuffer = await response.arrayBuffer();
-      // const workbook = XLSX.read(arrayBuffer);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
-      const availableSheets = mockWorkbook.SheetNames;
-      const recordCount = Math.floor(Math.random() * 200) + 50; // Mock record count
+      const arrayBuffer = await response.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+
+      const availableSheets = workbook.SheetNames;
+      const recordCount = workbook.SheetNames.reduce((total, sheetName) => {
+        const sheet = workbook.Sheets[sheetName];
+        if (sheet['!ref']) {
+          const range = XLSX.utils.decode_range(sheet['!ref']);
+          return total + Math.max(0, range.e.r - range.s.r);
+        }
+        return total;
+      }, 0);
 
       setExcelSources(prev => prev.map(s =>
         s.id === sourceId ? {
@@ -218,6 +252,64 @@ const DataSourcesPage = ({ excelSources, setExcelSources, apiIntegrations, setAp
           status: 'error'
         } : s
       ));
+    }
+  };
+
+  const handleFileUpload = async (file) => {
+    if (!file) return;
+
+    try {
+      setIsLoading(true);
+      setUploadError(null);
+
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+
+          const availableSheets = workbook.SheetNames;
+          const recordCount = workbook.SheetNames.reduce((total, sheetName) => {
+            const sheet = workbook.Sheets[sheetName];
+            if (sheet['!ref']) {
+              const range = XLSX.utils.decode_range(sheet['!ref']);
+              return total + Math.max(0, range.e.r - range.s.r);
+            }
+            return total;
+          }, 0);
+
+          const newSource = {
+            id: Date.now().toString(),
+            url: null,
+            nickname: file.name.replace(/\.[^/.]+$/, ''), // Remove extension
+            sheet: availableSheets[0], // Auto-select first sheet
+            availableSheets,
+            status: 'active',
+            lastSync: new Date(),
+            recordCount,
+            loading: false,
+            error: null,
+          };
+
+          setExcelSources(prev => [...prev, newSource]);
+          setIsLoading(false);
+        } catch (parseError) {
+          console.error('Error parsing Excel file:', parseError);
+          setUploadError('Failed to parse Excel file. Please ensure it\'s a valid Excel file.');
+          setIsLoading(false);
+        }
+      };
+
+      reader.onerror = () => {
+        setUploadError('Failed to read the file. Please try again.');
+        setIsLoading(false);
+      };
+
+      reader.readAsArrayBuffer(file);
+    } catch (error) {
+      console.error('Error handling file upload:', error);
+      setUploadError('An unexpected error occurred while uploading the file.');
+      setIsLoading(false);
     }
   };
 
@@ -367,6 +459,37 @@ const DataSourcesPage = ({ excelSources, setExcelSources, apiIntegrations, setAp
         <button className="btn btn-secondary" onClick={addExcelSource}>
           <Plus size={18} /> Add Excel Source
         </button>
+
+        {/* FILE UPLOAD SECTION */}
+        <div className="file-upload-section">
+          <div className="file-upload-header">
+            <Upload size={18} />
+            <span>Or upload Excel file directly</span>
+          </div>
+          <input
+            type="file"
+            accept=".xlsx,.xls,.xlsm,.xlsb"
+            onChange={(e) => handleFileUpload(e.target.files[0])}
+            className="file-input"
+            id="excel-upload"
+          />
+          <label htmlFor="excel-upload" className="file-upload-label">
+            <Upload size={16} />
+            Choose Excel File
+          </label>
+          {isLoading && (
+            <div className="upload-status">
+              <div className="loading-spinner"></div>
+              <span>Processing file...</span>
+            </div>
+          )}
+          {uploadError && (
+            <div className="error-message">
+              <AlertCircle size={16} />
+              {uploadError}
+            </div>
+          )}
+        </div>
       </section>
 
       {/* API INTEGRATIONS SECTION */}
@@ -794,7 +917,7 @@ const ReportGeneratorPage = ({ excelSources }) => {
         <div className="report-container">
           <div className="report-header-section">
             <div className="report-title">
-              <Shield size={32} style={{ color: '#0A84FF' }} />
+              <Shield size={32} style={{ color: 'var(--accent)' }} />
               <div>
                 <h1>{reportType.toUpperCase()} SOC REPORT</h1>
                 <p>Generated on {new Date(generatedReport.date).toLocaleDateString()}</p>
@@ -845,7 +968,7 @@ const ReportGeneratorPage = ({ excelSources }) => {
                     labelLine={false}
                     label={({ name, value }) => `${name}: ${value}`}
                     outerRadius={100}
-                    fill="#8884d8"
+                    fill="var(--accent)"
                     dataKey="value"
                   >
                     {severityChartData.map((entry, index) => (
@@ -864,10 +987,10 @@ const ReportGeneratorPage = ({ excelSources }) => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={categoryChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                  <XAxis dataKey="name" stroke="#86868b" />
-                  <YAxis stroke="#86868b" />
-                  <Tooltip contentStyle={{ backgroundColor: '#1a1a1f', border: '1px solid rgba(255,255,255,0.1)' }} />
-                  <Bar dataKey="count" fill="#0A84FF" />
+                  <XAxis dataKey="name" stroke="var(--text-secondary)" />
+                  <YAxis stroke="var(--text-secondary)" />
+                  <Tooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }} />
+                  <Bar dataKey="count" fill="var(--accent)" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -939,7 +1062,7 @@ const ReportFormatterPage = () => {
   const [chartPalette, setChartPalette] = useState('SOC Dark');
   const [tableColumns, setTableColumns] = useState(['ID', 'Timestamp', 'Analyst', 'Severity', 'Category', 'Title', 'Status']);
   const [includedCharts, setIncludedCharts] = useState(true);
-  const [headerColor, setHeaderColor] = useState('#0A84FF');
+  const [headerColor, setHeaderColor] = useState('var(--accent)');
   const [aiSummaryLength, setAiSummaryLength] = useState('standard');
 
   const currentSections = 
@@ -1156,6 +1279,7 @@ export default function SOCReportingTool() {
   const [currentPage, setCurrentPage] = useState('home');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const { isDarkMode, toggleTheme } = useTheme();
 
   // Shared state for Excel sources
   const [excelSources, setExcelSources] = useState([
@@ -1203,7 +1327,7 @@ export default function SOCReportingTool() {
       {/* SIDEBAR */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : 'closed'}`}>
         <div className="sidebar-logo">
-          <Shield size={28} style={{ color: '#0A84FF' }} />
+          <Shield size={28} style={{ color: 'var(--accent)' }} />
           <span>SOC Lens</span>
         </div>
 
@@ -1245,6 +1369,13 @@ export default function SOCReportingTool() {
           </button>
           <h2>{pages[currentPage].label}</h2>
           <div className="top-bar-actions">
+            <button
+              className="btn-icon btn-theme-toggle"
+              onClick={toggleTheme}
+              title={`Switch to ${isDarkMode ? 'light' : 'dark'} mode`}
+            >
+              {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+            </button>
             <span className="time-display">
               {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
@@ -1268,6 +1399,44 @@ export default function SOCReportingTool() {
       </div>
 
       <style>{`
+        :root {
+          /* Dark theme (default) */
+          --bg-primary: #08080d;
+          --bg-secondary: rgba(17, 17, 24, 0.8);
+          --bg-card: rgba(255, 255, 255, 0.04);
+          --bg-card-hover: rgba(255, 255, 255, 0.06);
+          --border-color: rgba(255, 255, 255, 0.08);
+          --border-hover: rgba(255, 255, 255, 0.12);
+          --text-primary: #f5f5f7;
+          --text-secondary: #86868b;
+          --accent: #0A84FF;
+          --accent-hover: #0077ed;
+          --success: #30D158;
+          --warning: #FF9F0A;
+          --error: #FF453A;
+          --glass-bg: rgba(255, 255, 255, 0.04);
+          --glass-border: rgba(255, 255, 255, 0.08);
+        }
+
+        [data-theme="light"] {
+          /* Light theme */
+          --bg-primary: #f5f5f7;
+          --bg-secondary: rgba(255, 255, 255, 0.9);
+          --bg-card: rgba(0, 0, 0, 0.04);
+          --bg-card-hover: rgba(0, 0, 0, 0.06);
+          --border-color: rgba(0, 0, 0, 0.08);
+          --border-hover: rgba(0, 0, 0, 0.12);
+          --text-primary: #1d1d1f;
+          --text-secondary: #666666;
+          --accent: #0071e3;
+          --accent-hover: #005bb5;
+          --success: #34a853;
+          --warning: #fbbc04;
+          --error: #ea4335;
+          --glass-bg: rgba(255, 255, 255, 0.8);
+          --glass-border: rgba(0, 0, 0, 0.08);
+        }
+
         * {
           margin: 0;
           padding: 0;
@@ -1276,23 +1445,25 @@ export default function SOCReportingTool() {
 
         body {
           font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
-          background: #08080d;
-          color: #f5f5f7;
+          background: var(--bg-primary);
+          color: var(--text-primary);
           overflow: hidden;
+          transition: background-color 0.3s ease, color 0.3s ease;
         }
 
         .soc-app {
           display: flex;
           height: 100vh;
-          background: #08080d;
+          background: var(--bg-primary);
+          transition: background-color 0.3s ease;
         }
 
         /* SIDEBAR */
         .sidebar {
           width: 260px;
-          background: rgba(17, 17, 24, 0.8);
+          background: var(--bg-secondary);
           backdrop-filter: blur(12px);
-          border-right: 1px solid rgba(255, 255, 255, 0.08);
+          border-right: 1px solid var(--border-color);
           display: flex;
           flex-direction: column;
           padding: 20px;
@@ -1314,7 +1485,7 @@ export default function SOCReportingTool() {
           font-size: 18px;
           font-weight: 600;
           margin-bottom: 32px;
-          color: #f5f5f7;
+          color: var(--text-primary);
         }
 
         .sidebar-nav {
@@ -1342,7 +1513,7 @@ export default function SOCReportingTool() {
 
         .nav-item:hover {
           background: rgba(255, 255, 255, 0.04);
-          color: #f5f5f7;
+          color: var(--text-primary);
         }
 
         .nav-item.active {
@@ -1387,9 +1558,14 @@ export default function SOCReportingTool() {
           justify-content: center;
         }
 
-        .btn-icon:hover {
-          background: rgba(255, 255, 255, 0.08);
-          color: #f5f5f7;
+        .btn-theme-toggle {
+          color: var(--text-primary);
+          transition: all 0.2s ease;
+        }
+
+        .btn-theme-toggle:hover {
+          background: var(--bg-card-hover);
+          color: var(--accent);
         }
 
         /* MAIN CONTENT */
@@ -1422,7 +1598,7 @@ export default function SOCReportingTool() {
         .btn-sidebar-toggle {
           background: transparent;
           border: none;
-          color: #f5f5f7;
+          color: var(--text-primary);
           cursor: pointer;
           padding: 8px;
           border-radius: 8px;
@@ -1460,12 +1636,12 @@ export default function SOCReportingTool() {
         .page-header h1 {
           font-size: 32px;
           margin-bottom: 8px;
-          color: #f5f5f7;
+          color: var(--text-primary);
         }
 
         .subtitle {
           font-size: 16px;
-          color: #86868b;
+          color: var(--text-secondary);
         }
 
         /* BUTTONS */
@@ -1503,7 +1679,7 @@ export default function SOCReportingTool() {
 
         .btn-secondary {
           background: rgba(255, 255, 255, 0.08);
-          color: #f5f5f7;
+          color: var(--text-primary);
           border: 1px solid rgba(255, 255, 255, 0.12);
         }
 
@@ -1569,7 +1745,7 @@ export default function SOCReportingTool() {
           background: rgba(255, 255, 255, 0.06);
           border: 1px solid rgba(255, 255, 255, 0.12);
           border-radius: 8px;
-          color: #f5f5f7;
+          color: var(--text-primary);
           font-family: inherit;
           font-size: 14px;
           transition: all 0.2s ease;
@@ -1582,7 +1758,7 @@ export default function SOCReportingTool() {
         }
 
         .input-field::placeholder {
-          color: #86868b;
+          color: var(--text-secondary);
         }
 
         .input-select {
@@ -1627,7 +1803,7 @@ export default function SOCReportingTool() {
           display: flex;
           align-items: center;
           gap: 8px;
-          color: #f5f5f7;
+          color: var(--text-primary);
         }
 
         .sources-list {
@@ -1749,11 +1925,11 @@ export default function SOCReportingTool() {
         }
 
         .sync-text {
-          color: #86868b;
+          color: var(--text-secondary);
         }
 
         .record-count {
-          color: #86868b;
+          color: var(--text-secondary);
           margin-left: auto;
         }
 
@@ -1781,7 +1957,7 @@ export default function SOCReportingTool() {
 
         .health-label {
           font-size: 13px;
-          color: #86868b;
+          color: var(--text-secondary);
           margin-bottom: 8px;
         }
 
@@ -1789,6 +1965,57 @@ export default function SOCReportingTool() {
           font-size: 24px;
           font-weight: 600;
           color: #0A84FF;
+        }
+
+        /* FILE UPLOAD */
+        .file-upload-section {
+          margin-top: 16px;
+          padding: 16px;
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 12px;
+        }
+
+        .file-upload-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 12px;
+          font-size: 14px;
+          color: var(--text-secondary);
+        }
+
+        .file-input {
+          display: none;
+        }
+
+        .file-upload-label {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 16px;
+          background: rgba(10, 132, 255, 0.1);
+          border: 1px solid rgba(10, 132, 255, 0.3);
+          border-radius: 8px;
+          color: #0A84FF;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 500;
+          transition: all 0.2s ease;
+        }
+
+        .file-upload-label:hover {
+          background: rgba(10, 132, 255, 0.15);
+          border-color: rgba(10, 132, 255, 0.5);
+        }
+
+        .upload-status {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 12px;
+          font-size: 14px;
+          color: var(--text-secondary);
         }
 
         .option-description {
@@ -2222,7 +2449,7 @@ export default function SOCReportingTool() {
 
         .stat-label {
           font-size: 14px;
-          color: #86868b;
+          color: var(--text-secondary);
           font-weight: 500;
         }
 
@@ -2246,7 +2473,7 @@ export default function SOCReportingTool() {
         .stat-value {
           font-size: 32px;
           font-weight: 700;
-          color: #f5f5f7;
+          color: var(--text-primary);
         }
 
         .quick-actions {
@@ -2312,12 +2539,12 @@ export default function SOCReportingTool() {
 
         .activity-text {
           font-size: 14px;
-          color: #f5f5f7;
+          color: var(--text-primary);
         }
 
         .activity-time {
           font-size: 12px;
-          color: #86868b;
+          color: var(--text-secondary);
         }
 
         .system-status {
@@ -2359,7 +2586,7 @@ export default function SOCReportingTool() {
 
         .status-item span {
           font-size: 14px;
-          color: #f5f5f7;
+          color: var(--text-primary);
         }
 
         @media (max-width: 768px) {
