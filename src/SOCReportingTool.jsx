@@ -159,32 +159,7 @@ const HomePage = () => {
   );
 };
 
-const DataSourcesPage = ({ onDataChange }) => {
-  const [excelSources, setExcelSources] = useState([
-    {
-      id: '1',
-      url: '',
-      nickname: 'Tier 1 Observations',
-      sheet: '',
-      availableSheets: [],
-      status: 'inactive',
-      lastSync: null,
-      recordCount: 0,
-      loading: false,
-      error: null,
-    },
-  ]);
-
-  const [apiIntegrations, setApiIntegrations] = useState([
-    {
-      id: 'api1',
-      tool: 'ServiceNow',
-      nickname: 'Incident Management',
-      status: 'active',
-      lastSync: new Date(),
-      recordCount: 89,
-    },
-  ]);
+const DataSourcesPage = ({ excelSources, setExcelSources, apiIntegrations, setApiIntegrations }) => {
 
   const [totalRecords, setTotalRecords] = useState(231);
 
@@ -505,11 +480,14 @@ const DataSourcesPage = ({ onDataChange }) => {
 // REPORT GENERATOR PAGE
 // ═══════════════════════════════════════════════════════
 
-const ReportGeneratorPage = () => {
+const ReportGeneratorPage = ({ excelSources }) => {
   const [reportType, setReportType] = useState('daily');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedAnalysts, setSelectedAnalysts] = useState([]);
   const [selectedSeverities, setSelectedSeverities] = useState(['Critical', 'High']);
+  const [selectedSources, setSelectedSources] = useState([]);
+  const [sourceSheets, setSourceSheets] = useState({});
+  const [sourceColumns, setSourceColumns] = useState({});
   const [includeAISummary, setIncludeAISummary] = useState(true);
   const [includeRawTable, setIncludeRawTable] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -518,21 +496,97 @@ const ReportGeneratorPage = () => {
   const analysts = ['Alice Chen', 'Bob Smith', 'Carol Zhang', 'David Park'];
   const severities = ['Critical', 'High', 'Medium', 'Low'];
 
+  // Available Excel sources (filter active ones)
+  const availableSources = excelSources.filter(s => s.status === 'active');
+
+  const handleSourceToggle = (sourceId) => {
+    setSelectedSources(prev => {
+      const newSelected = prev.includes(sourceId)
+        ? prev.filter(id => id !== sourceId)
+        : [...prev, sourceId];
+
+      // Initialize sheet and column selections for new source
+      if (!prev.includes(sourceId)) {
+        const source = availableSources.find(s => s.id === sourceId);
+        if (source) {
+          setSourceSheets(prevSheets => ({
+            ...prevSheets,
+            [sourceId]: source.sheet || source.availableSheets[0] || ''
+          }));
+          setSourceColumns(prevColumns => ({
+            ...prevColumns,
+            [sourceId]: ['ID', 'Timestamp', 'Analyst', 'Severity', 'Category', 'Title', 'Status'] // Default columns
+          }));
+        }
+      }
+
+      return newSelected;
+    });
+  };
+
+  const handleSheetChange = (sourceId, sheetName) => {
+    setSourceSheets(prev => ({
+      ...prev,
+      [sourceId]: sheetName
+    }));
+    // Reset columns when sheet changes
+    setSourceColumns(prev => ({
+      ...prev,
+      [sourceId]: ['ID', 'Timestamp', 'Analyst', 'Severity', 'Category', 'Title', 'Status']
+    }));
+  };
+
+  const handleColumnToggle = (sourceId, column) => {
+    setSourceColumns(prev => ({
+      ...prev,
+      [sourceId]: prev[sourceId]?.includes(column)
+        ? prev[sourceId].filter(c => c !== column)
+        : [...(prev[sourceId] || []), column]
+    }));
+  };
+
   const handleGenerateReport = async () => {
     setGenerating(true);
-    // Simulate API call
-    await new Promise(r => setTimeout(r, 2000));
-    
-    const filteredIncidents = MOCK_INCIDENTS.filter(inc =>
+
+    // Simulate fetching data from selected sources
+    const allIncidents = [];
+    let totalRecords = 0;
+
+    for (const sourceId of selectedSources) {
+      const source = availableSources.find(s => s.id === sourceId);
+      if (source) {
+        // Mock data fetching - in real app, this would parse actual Excel data
+        const mockIncidents = Array.from({ length: Math.floor(source.recordCount / 10) }, (_, i) => ({
+          id: `${source.nickname}-INC-${String(i + 1).padStart(4, '0')}`,
+          timestamp: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString(),
+          analyst: analysts[Math.floor(Math.random() * analysts.length)],
+          severity: severities[Math.floor(Math.random() * severities.length)],
+          category: ['Malware', 'Phishing', 'Intrusion', 'Data Exfiltration', 'Unauthorized Access'][Math.floor(Math.random() * 5)],
+          title: `Incident from ${source.nickname}`,
+          description: `Generated from ${source.sheet} sheet`,
+          status: ['Open', 'Investigating', 'Resolved', 'Escalated'][Math.floor(Math.random() * 4)],
+          source: source.nickname,
+        }));
+
+        allIncidents.push(...mockIncidents);
+        totalRecords += source.recordCount;
+      }
+    }
+
+    // Filter incidents based on user selections
+    const filteredIncidents = allIncidents.filter(inc =>
       (!selectedAnalysts.length || selectedAnalysts.includes(inc.analyst)) &&
       selectedSeverities.includes(inc.severity)
     );
+
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate processing
 
     setGeneratedReport({
       type: reportType,
       date: selectedDate,
       incidents: filteredIncidents,
       totalIncidents: filteredIncidents.length,
+      selectedSources: selectedSources.map(id => availableSources.find(s => s.id === id)?.nickname).filter(Boolean),
       severityCounts: severities.reduce((acc, sev) => ({
         ...acc,
         [sev]: filteredIncidents.filter(i => i.severity === sev).length
@@ -578,7 +632,75 @@ const ReportGeneratorPage = () => {
         ))}
       </div>
 
-      {/* OPTIONS PANEL */}
+      {/* SOURCE SELECTION */}
+      <div className="options-panel">
+        <div className="option-group full-width">
+          <label>Data Sources</label>
+          <p className="option-description">Select Excel sources and configure data extraction</p>
+
+          {availableSources.length > 0 ? (
+            <div className="source-selection">
+              {availableSources.map(source => (
+                <div key={source.id} className="source-selection-item">
+                  <div className="source-selection-header">
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={selectedSources.includes(source.id)}
+                        onChange={() => handleSourceToggle(source.id)}
+                      />
+                      <Database size={16} />
+                      {source.nickname}
+                      <span className="source-meta">({source.recordCount} records)</span>
+                    </label>
+                  </div>
+
+                  {selectedSources.includes(source.id) && (
+                    <div className="source-config">
+                      {/* Sheet Selection */}
+                      <div className="config-row">
+                        <label className="config-label">Sheet:</label>
+                        <select
+                          value={sourceSheets[source.id] || ''}
+                          onChange={(e) => handleSheetChange(source.id, e.target.value)}
+                          className="input-field input-select"
+                        >
+                          {source.availableSheets.map(sheet => (
+                            <option key={sheet} value={sheet}>{sheet}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Column Selection */}
+                      <div className="config-row">
+                        <label className="config-label">Columns:</label>
+                        <div className="column-selection">
+                          {['ID', 'Timestamp', 'Analyst', 'Severity', 'Category', 'Title', 'Description', 'Status', 'Resolution'].map(column => (
+                            <label key={column} className="checkbox-label small">
+                              <input
+                                type="checkbox"
+                                checked={sourceColumns[source.id]?.includes(column) || false}
+                                onChange={() => handleColumnToggle(source.id, column)}
+                              />
+                              {column}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="no-sources">
+              <p>No active Excel sources found. Add and configure sources in the Data Sources page.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* FILTERS */}
       <div className="options-panel">
         <div className="option-group">
           <label>Date</label>
@@ -660,7 +782,7 @@ const ReportGeneratorPage = () => {
         <button
           className={`btn btn-primary ${generating ? 'generating' : ''}`}
           onClick={handleGenerateReport}
-          disabled={generating}
+          disabled={generating || selectedSources.length === 0}
         >
           <BarChart3 size={18} />
           {generating ? 'Generating...' : `Generate ${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Report`}
@@ -684,7 +806,7 @@ const ReportGeneratorPage = () => {
             <div className="report-section">
               <h2>Executive Summary</h2>
               <p className="report-text">
-                This {reportType} report covers SOC operations for the period of {generatedReport.date}. A total of {generatedReport.totalIncidents} security incidents were processed, with {generatedReport.severityCounts.Critical} critical, {generatedReport.severityCounts.High} high severity, and {generatedReport.severityCounts.Medium + generatedReport.severityCounts.Low} lower severity events. All critical incidents have been addressed, and the security posture remains stable.
+                This {reportType} report covers SOC operations for the period of {generatedReport.date}. Data was sourced from {generatedReport.selectedSources.join(', ')}. A total of {generatedReport.totalIncidents} security incidents were processed, with {generatedReport.severityCounts.Critical} critical, {generatedReport.severityCounts.High} high severity, and {generatedReport.severityCounts.Medium + generatedReport.severityCounts.Low} lower severity events. All critical incidents have been addressed, and the security posture remains stable.
               </p>
             </div>
           )}
@@ -1035,6 +1157,33 @@ export default function SOCReportingTool() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  // Shared state for Excel sources
+  const [excelSources, setExcelSources] = useState([
+    {
+      id: '1',
+      url: '',
+      nickname: 'Tier 1 Observations',
+      sheet: '',
+      availableSheets: [],
+      status: 'inactive',
+      lastSync: null,
+      recordCount: 0,
+      loading: false,
+      error: null,
+    },
+  ]);
+
+  const [apiIntegrations, setApiIntegrations] = useState([
+    {
+      id: 'api1',
+      tool: 'ServiceNow',
+      nickname: 'Incident Management',
+      status: 'active',
+      lastSync: new Date(),
+      recordCount: 89,
+    },
+  ]);
+
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
@@ -1103,7 +1252,19 @@ export default function SOCReportingTool() {
         </div>
 
         {/* PAGE CONTENT */}
-        <CurrentPageComponent />
+        {currentPage === 'home' && <HomePage />}
+        {currentPage === 'sources' && (
+          <DataSourcesPage
+            excelSources={excelSources}
+            setExcelSources={setExcelSources}
+            apiIntegrations={apiIntegrations}
+            setApiIntegrations={setApiIntegrations}
+          />
+        )}
+        {currentPage === 'generator' && (
+          <ReportGeneratorPage excelSources={excelSources} />
+        )}
+        {currentPage === 'formatter' && <ReportFormatterPage />}
       </div>
 
       <style>{`
@@ -1630,17 +1791,82 @@ export default function SOCReportingTool() {
           color: #0A84FF;
         }
 
-        /* OPTIONS PANEL */
-        .options-panel {
+        .option-description {
+          font-size: 13px;
+          color: #86868b;
+          margin-bottom: 12px;
+        }
+
+        .full-width {
+          grid-column: 1 / -1;
+        }
+
+        .source-selection {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .source-selection-item {
           background: rgba(255, 255, 255, 0.04);
           border: 1px solid rgba(255, 255, 255, 0.08);
-          backdrop-filter: blur(12px);
-          border-radius: 12px;
-          padding: 24px;
-          margin-bottom: 24px;
+          border-radius: 8px;
+          padding: 16px;
+        }
+
+        .source-selection-header {
+          margin-bottom: 12px;
+        }
+
+        .source-selection-header .checkbox-label {
+          font-size: 16px;
+          font-weight: 500;
+        }
+
+        .source-meta {
+          font-size: 12px;
+          color: #86868b;
+          margin-left: 8px;
+        }
+
+        .source-config {
+          border-top: 1px solid rgba(255, 255, 255, 0.08);
+          padding-top: 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .config-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .config-label {
+          font-size: 14px;
+          color: #f5f5f7;
+          min-width: 60px;
+        }
+
+        .column-selection {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 24px;
+          grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+          gap: 8px;
+        }
+
+        .checkbox-label.small {
+          font-size: 12px;
+        }
+
+        .no-sources {
+          text-align: center;
+          padding: 32px;
+          color: #86868b;
+        }
+
+        .no-sources p {
+          margin: 0;
         }
 
         .option-group {
