@@ -1,0 +1,49 @@
+/* App Layout - Apple Style */
+.App {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content {
+  flex: 1;
+  padding: 32px 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.page-container {
+  padding: 32px 0;
+}
+
+.page-container h1 {
+  margin-bottom: 16px;
+  color: #1d1d1f;
+}
+
+.page-container p {
+  font-size: 16px;
+  color: #666;
+}
+
+/* Responsive layout */
+@media (max-width: 768px) {
+  .main-content {
+    padding: 24px 16px;
+  }
+
+  .page-container {
+    padding: 24px 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .main-content {
+    padding: 16px 12px;
+  }
+
+  .page-container h1 {
+    font-size: 24px;
+  }
+}
