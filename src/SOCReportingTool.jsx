@@ -2,6 +2,9 @@ import React, { useState, useReducer, useEffect, useRef } from 'react';
 import { Shield, Database, BarChart3, Palette, ChevronRight, Plus, Trash2, Cloud, HardDrive, Settings, Menu, X, Zap, Check, AlertCircle, Filter, Download, Copy, Printer, Mail, Eye, EyeOff, GripVertical, Save, RotateCcw } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart } from 'recharts';
 
+// Import SheetJS for Excel parsing
+import * as XLSX from 'https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs';
+
 // ═══════════════════════════════════════════════════════
 // MOCK DATA & CONSTANTS
 // ═══════════════════════════════════════════════════════
@@ -58,19 +61,117 @@ const REPORT_SECTIONS_MONTHLY = [
 ];
 
 // ═══════════════════════════════════════════════════════
-// DATA SOURCES PAGE
+// HOME PAGE
 // ═══════════════════════════════════════════════════════
+
+const HomePage = () => {
+  const stats = [
+    { label: 'Total Incidents', value: '2,847', change: '+12%', trend: 'up' },
+    { label: 'Active Sources', value: '8', change: '+2', trend: 'up' },
+    { label: 'Reports Generated', value: '156', change: '+8%', trend: 'up' },
+    { label: 'Avg Response Time', value: '4.2m', change: '-15%', trend: 'down' },
+  ];
+
+  const recentActivity = [
+    { time: '2 min ago', action: 'Daily report generated', type: 'report' },
+    { time: '15 min ago', action: 'Excel source synced (142 records)', type: 'sync' },
+    { time: '1 hour ago', action: 'API integration tested (ServiceNow)', type: 'test' },
+    { time: '2 hours ago', action: 'Weekly report generated', type: 'report' },
+  ];
+
+  return (
+    <div className="page-content">
+      <div className="page-header">
+        <h1>Dashboard</h1>
+        <p className="subtitle">Welcome to your SOC Reporting Tool</p>
+      </div>
+
+      {/* STATS GRID */}
+      <div className="stats-grid">
+        {stats.map((stat, index) => (
+          <div key={index} className="stat-card">
+            <div className="stat-header">
+              <span className="stat-label">{stat.label}</span>
+              <span className={`stat-change ${stat.trend}`}>
+                {stat.change}
+              </span>
+            </div>
+            <div className="stat-value">{stat.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* QUICK ACTIONS */}
+      <div className="quick-actions">
+        <h2>Quick Actions</h2>
+        <div className="action-buttons">
+          <button className="btn btn-primary">
+            <BarChart3 size={18} /> Generate Daily Report
+          </button>
+          <button className="btn btn-secondary">
+            <Plus size={18} /> Add Data Source
+          </button>
+          <button className="btn btn-secondary">
+            <Settings size={18} /> Configure Reports
+          </button>
+        </div>
+      </div>
+
+      {/* RECENT ACTIVITY */}
+      <div className="recent-activity">
+        <h2>Recent Activity</h2>
+        <div className="activity-list">
+          {recentActivity.map((activity, index) => (
+            <div key={index} className="activity-item">
+              <div className="activity-icon">
+                {activity.type === 'report' && <BarChart3 size={16} />}
+                {activity.type === 'sync' && <Database size={16} />}
+                {activity.type === 'test' && <Check size={16} />}
+              </div>
+              <div className="activity-content">
+                <span className="activity-text">{activity.action}</span>
+                <span className="activity-time">{activity.time}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* SYSTEM STATUS */}
+      <div className="system-status">
+        <h2>System Status</h2>
+        <div className="status-indicators">
+          <div className="status-item">
+            <div className="status-dot active"></div>
+            <span>All systems operational</span>
+          </div>
+          <div className="status-item">
+            <div className="status-dot active"></div>
+            <span>8 data sources connected</span>
+          </div>
+          <div className="status-item">
+            <div className="status-dot warning"></div>
+            <span>2 sources need attention</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const DataSourcesPage = ({ onDataChange }) => {
   const [excelSources, setExcelSources] = useState([
     {
       id: '1',
-      url: 'https://example.com/sample.xlsx',
+      url: '',
       nickname: 'Tier 1 Observations',
-      sheet: 'Analyst Observations',
-      status: 'active',
-      lastSync: new Date(),
-      recordCount: 142,
+      sheet: '',
+      availableSheets: [],
+      status: 'inactive',
+      lastSync: null,
+      recordCount: 0,
+      loading: false,
+      error: null,
     },
   ]);
 
@@ -87,6 +188,64 @@ const DataSourcesPage = ({ onDataChange }) => {
 
   const [totalRecords, setTotalRecords] = useState(231);
 
+  // Function to fetch and parse Excel file
+  const fetchExcelSheets = async (url, sourceId) => {
+    if (!url.trim()) return;
+
+    setExcelSources(prev => prev.map(s =>
+      s.id === sourceId ? { ...s, loading: true, error: null } : s
+    ));
+
+    try {
+      // For demo purposes, we'll simulate fetching
+      // In a real implementation, you'd use fetch() with CORS handling
+      await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate network delay
+
+      // Mock Excel data - in real app, this would be actual XLSX.read()
+      const mockWorkbook = {
+        SheetNames: ['Analyst Observations', 'Escalations', 'Summary', 'Raw Data', 'Metrics'],
+        Sheets: {
+          'Analyst Observations': { A1: { v: 'ID' }, B1: { v: 'Timestamp' }, C1: { v: 'Analyst' } },
+          'Escalations': { A1: { v: 'Case ID' }, B1: { v: 'Priority' }, C1: { v: 'Status' } },
+          'Summary': { A1: { v: 'Date' }, B1: { v: 'Total Incidents' }, C1: { v: 'Resolved' } },
+          'Raw Data': { A1: { v: 'Event ID' }, B1: { v: 'Source' }, C1: { v: 'Details' } },
+          'Metrics': { A1: { v: 'Metric' }, B1: { v: 'Value' }, C1: { v: 'Target' } },
+        }
+      };
+
+      // In real implementation:
+      // const response = await fetch(url);
+      // const arrayBuffer = await response.arrayBuffer();
+      // const workbook = XLSX.read(arrayBuffer);
+
+      const availableSheets = mockWorkbook.SheetNames;
+      const recordCount = Math.floor(Math.random() * 200) + 50; // Mock record count
+
+      setExcelSources(prev => prev.map(s =>
+        s.id === sourceId ? {
+          ...s,
+          availableSheets,
+          sheet: availableSheets[0], // Auto-select first sheet
+          status: 'active',
+          lastSync: new Date(),
+          recordCount,
+          loading: false,
+          error: null,
+        } : s
+      ));
+
+    } catch (error) {
+      setExcelSources(prev => prev.map(s =>
+        s.id === sourceId ? {
+          ...s,
+          loading: false,
+          error: 'Failed to load Excel file. Check URL and permissions.',
+          status: 'error'
+        } : s
+      ));
+    }
+  };
+
   const addExcelSource = () => {
     setExcelSources([
       ...excelSources,
@@ -95,9 +254,12 @@ const DataSourcesPage = ({ onDataChange }) => {
         url: '',
         nickname: 'New Excel Source',
         sheet: '',
+        availableSheets: [],
         status: 'inactive',
         lastSync: null,
         recordCount: 0,
+        loading: false,
+        error: null,
       },
     ]);
   };
@@ -124,6 +286,18 @@ const DataSourcesPage = ({ onDataChange }) => {
     setApiIntegrations(apiIntegrations.filter(s => s.id !== id));
   };
 
+  const handleUrlChange = (sourceId, url) => {
+    setExcelSources(prev => prev.map(s =>
+      s.id === sourceId ? { ...s, url, availableSheets: [], sheet: '', status: 'inactive' } : s
+    ));
+  };
+
+  const handleUrlBlur = (sourceId, url) => {
+    if (url.trim()) {
+      fetchExcelSheets(url, sourceId);
+    }
+  };
+
   return (
     <div className="page-content">
       <div className="page-header">
@@ -144,13 +318,12 @@ const DataSourcesPage = ({ onDataChange }) => {
                   type="text"
                   placeholder="Paste Excel/SharePoint URL..."
                   value={source.url}
-                  onChange={(e) => {
-                    setExcelSources(excelSources.map(s =>
-                      s.id === source.id ? { ...s, url: e.target.value } : s
-                    ));
-                  }}
+                  onChange={(e) => handleUrlChange(source.id, e.target.value)}
+                  onBlur={(e) => handleUrlBlur(source.id, e.target.value)}
                   className="input-field input-url"
+                  disabled={source.loading}
                 />
+                {source.loading && <div className="loading-spinner"></div>}
                 <button
                   className="btn-icon btn-delete"
                   onClick={() => removeExcelSource(source.id)}
@@ -159,6 +332,19 @@ const DataSourcesPage = ({ onDataChange }) => {
                   <Trash2 size={18} />
                 </button>
               </div>
+
+              {source.error && (
+                <div className="error-message">
+                  <AlertCircle size={16} />
+                  {source.error}
+                  <button
+                    className="btn-link"
+                    onClick={() => handleUrlBlur(source.id, source.url)}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
 
               <div className="source-meta">
                 <input
@@ -172,7 +358,7 @@ const DataSourcesPage = ({ onDataChange }) => {
                   }}
                   className="input-field input-small"
                 />
-                {source.sheet && (
+                {source.availableSheets.length > 0 && (
                   <select
                     value={source.sheet}
                     onChange={(e) => {
@@ -183,10 +369,9 @@ const DataSourcesPage = ({ onDataChange }) => {
                     className="input-field input-select"
                   >
                     <option value="">Select Sheet</option>
-                    <option value="Analyst Observations">Analyst Observations</option>
-                    <option value="Escalations">Escalations</option>
-                    <option value="Summary">Summary</option>
-                    <option value="Raw Data">Raw Data</option>
+                    {source.availableSheets.map(sheetName => (
+                      <option key={sheetName} value={sheetName}>{sheetName}</option>
+                    ))}
                   </select>
                 )}
               </div>
@@ -194,7 +379,7 @@ const DataSourcesPage = ({ onDataChange }) => {
               <div className="source-status">
                 <span className={`status-badge ${source.status}`}>
                   <span className={`status-dot ${source.status}`}></span>
-                  {source.status}
+                  {source.loading ? 'Loading...' : source.status}
                 </span>
                 {source.lastSync && (
                   <span className="sync-text">Last synced: {source.lastSync.toLocaleTimeString()}</span>
@@ -846,7 +1031,7 @@ const ReportFormatterPage = () => {
 // ═══════════════════════════════════════════════════════
 
 export default function SOCReportingTool() {
-  const [currentPage, setCurrentPage] = useState('sources');
+  const [currentPage, setCurrentPage] = useState('home');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -856,6 +1041,7 @@ export default function SOCReportingTool() {
   }, []);
 
   const pages = {
+    home: { label: 'Home', icon: Shield, component: HomePage },
     sources: { label: 'Data Sources', icon: Database, component: DataSourcesPage },
     generator: { label: 'Report Generator', icon: BarChart3, component: ReportGeneratorPage },
     formatter: { label: 'Report Formatter', icon: Palette, component: ReportFormatterPage },
@@ -1307,6 +1493,48 @@ export default function SOCReportingTool() {
           display: flex;
           gap: 8px;
           margin-bottom: 12px;
+          align-items: center;
+        }
+
+        .loading-spinner {
+          width: 16px;
+          height: 16px;
+          border: 2px solid rgba(255, 255, 255, 0.2);
+          border-top: 2px solid #0A84FF;
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 12px;
+          background: rgba(255, 69, 58, 0.1);
+          border: 1px solid rgba(255, 69, 58, 0.2);
+          border-radius: 6px;
+          color: #FF453A;
+          font-size: 13px;
+          margin-bottom: 12px;
+        }
+
+        .btn-link {
+          background: none;
+          border: none;
+          color: #0A84FF;
+          cursor: pointer;
+          font-size: 13px;
+          text-decoration: underline;
+          margin-left: auto;
+        }
+
+        .btn-link:hover {
+          color: #0077ed;
         }
 
         .source-meta {
@@ -1737,15 +1965,175 @@ export default function SOCReportingTool() {
           font-weight: 500;
         }
 
-        /* RESPONSIVE */
-        @media (max-width: 1200px) {
-          .formatter-grid {
-            grid-template-columns: 1fr;
-          }
+        /* HOME PAGE */
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+          gap: 16px;
+          margin-bottom: 32px;
+        }
 
-          .options-panel {
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-          }
+        .stat-card {
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          backdrop-filter: blur(12px);
+          border-radius: 12px;
+          padding: 20px;
+          transition: all 0.2s ease;
+        }
+
+        .stat-card:hover {
+          background: rgba(255, 255, 255, 0.06);
+          border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .stat-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+
+        .stat-label {
+          font-size: 14px;
+          color: #86868b;
+          font-weight: 500;
+        }
+
+        .stat-change {
+          font-size: 12px;
+          font-weight: 600;
+          padding: 4px 8px;
+          border-radius: 4px;
+        }
+
+        .stat-change.up {
+          background: rgba(48, 209, 88, 0.2);
+          color: #30D158;
+        }
+
+        .stat-change.down {
+          background: rgba(255, 69, 58, 0.2);
+          color: #FF453A;
+        }
+
+        .stat-value {
+          font-size: 32px;
+          font-weight: 700;
+          color: #f5f5f7;
+        }
+
+        .quick-actions {
+          margin-bottom: 32px;
+        }
+
+        .quick-actions h2 {
+          font-size: 18px;
+          margin-bottom: 16px;
+          color: #f5f5f7;
+        }
+
+        .action-buttons {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 12px;
+        }
+
+        .recent-activity {
+          margin-bottom: 32px;
+        }
+
+        .recent-activity h2 {
+          font-size: 18px;
+          margin-bottom: 16px;
+          color: #f5f5f7;
+        }
+
+        .activity-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .activity-item {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px 16px;
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 8px;
+        }
+
+        .activity-icon {
+          width: 32px;
+          height: 32px;
+          border-radius: 6px;
+          background: rgba(10, 132, 255, 0.1);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #0A84FF;
+          flex-shrink: 0;
+        }
+
+        .activity-content {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .activity-text {
+          font-size: 14px;
+          color: #f5f5f7;
+        }
+
+        .activity-time {
+          font-size: 12px;
+          color: #86868b;
+        }
+
+        .system-status {
+          margin-bottom: 32px;
+        }
+
+        .system-status h2 {
+          font-size: 18px;
+          margin-bottom: 16px;
+          color: #f5f5f7;
+        }
+
+        .status-indicators {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .status-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 0;
+        }
+
+        .status-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+        }
+
+        .status-dot.active {
+          background: #30D158;
+        }
+
+        .status-dot.warning {
+          background: #FF9F0A;
+        }
+
+        .status-item span {
+          font-size: 14px;
+          color: #f5f5f7;
         }
 
         @media (max-width: 768px) {
